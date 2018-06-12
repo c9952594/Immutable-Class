@@ -1,19 +1,59 @@
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CSharp;
+using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
+using static Microsoft.CodeAnalysis.CSharp.SyntaxKind;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
+using System.Collections.Generic;
+
 
 namespace ImmutableClass
 {
+    static class Extensions
+    {
+        public static string AsProperty(this string name) {
+            var propertyName = name.Trim('_');
+            propertyName = char.ToUpper(propertyName[0]) + propertyName.Substring(1);
+            return propertyName;
+        }
+
+        public static string AsParameter(this string name)
+        {
+            return name.Trim('_');
+        }
+    }
+
+    internal class Field
+    {
+        public readonly TypeSyntax Type;
+        public readonly string Name;
+
+        public Field(TypeSyntax type, string valueText)
+        {
+            this.Type = type;
+            this.Name = valueText;
+        }
+    }
+
+    internal class Class
+    {
+        public readonly TypeSyntax Type;
+        public readonly string Name;
+
+        public Class(string name)
+        {
+            this.Type = ParseTypeName(name);
+            this.Name = name;
+        }
+    }
+
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ImmutableClassCodeFixProvider)), Shared]
     public class ImmutableClassCodeFixProvider : CodeFixProvider
     {
@@ -42,114 +82,116 @@ namespace ImmutableClass
 
         static async Task<Solution> MakeImmutableAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
         {
-            var fields = typeDecl.DescendantNodes().OfType<FieldDeclarationSyntax>();
-            var readonlyFields = fields.Where(field => field.Modifiers.Any(modifier => modifier.Kind() == SyntaxKind.ReadOnlyKeyword)).ToArray();
+            var fieldDeclarations = typeDecl.DescendantNodes().OfType<FieldDeclarationSyntax>();
+            var readonlyFieldDeclarations = fieldDeclarations.Where(field => field.Modifiers.Any(modifier => modifier.Kind() == ReadOnlyKeyword)).ToArray();
 
-            var documentEditor = await DocumentEditor.CreateAsync(document, cancellationToken);
+            var @class = new Class(typeDecl.Identifier.ValueText);
+
+            var fields = readonlyFieldDeclarations.SelectMany(field => 
+                field.Declaration.Variables.Select(variable => 
+                    new Field(field.Declaration.Type, variable.Identifier.ValueText)));
             
-            var properties = AddProperties(readonlyFields);
-            var constructor = AddConstructor(typeDecl, readonlyFields);
-            var methods = AddWithMethods(typeDecl, readonlyFields);
+            var documentEditor = await DocumentEditor.CreateAsync(document, cancellationToken);
 
-            documentEditor.InsertAfter(readonlyFields.Last(), properties);
-            documentEditor.InsertAfter(readonlyFields.Last(), constructor);
-            documentEditor.InsertAfter(readonlyFields.Last(), methods);
+            var properties = GetProperties(fields);
+            var constructor = GetConstructor(@class, fields);
+            //var methods = AddWithMethods(typeDecl, readonlyFieldDeclarations);
+            
+            documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), properties);
+            documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), constructor);
+            
+            
+
+            //documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), methods);
 
             return document.Project.Solution.WithDocumentText(document.Id, await documentEditor.GetChangedDocument().GetTextAsync(cancellationToken));
         }
 
-        static SeparatedSyntaxList<PropertyDeclarationSyntax> AddProperties(FieldDeclarationSyntax[] readonlyFields)
-        {
-            return SyntaxFactory.SeparatedList(readonlyFields.SelectMany(field =>
-               {
-                   var fieldType = field.Declaration.Type;
-                   return field.Declaration.Variables.Select(variable =>
-                   {
-                       var variableName = variable.Identifier.ValueText;
-                       var propertyName = variableName.Trim('_');
-                       propertyName = char.ToUpper(propertyName[0]) + propertyName.Substring(1);
+        static IEnumerable<PropertyDeclarationSyntax> GetProperties(IEnumerable<Field> fields) 
+            => fields.Select(GetProperty);
 
-                       return SyntaxFactory.PropertyDeclaration(fieldType, SyntaxFactory.Identifier(propertyName))
-                           .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space))
-                           .WithExpressionBody(SyntaxFactory.ArrowExpressionClause(SyntaxFactory.IdentifierName(variableName)))
-                           .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
-                           .WithTrailingTrivia(SyntaxFactory.Whitespace("\n"));
-                   });
-               }));
-        }
+        static PropertyDeclarationSyntax GetProperty(Field field) 
+            => PropertyDeclaration(field.Type, field.Name.AsProperty())
+                .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
+                .WithExpressionBody(ArrowExpressionClause(IdentifierName(field.Name)))
+                .WithSemicolonToken(Token(SemicolonToken))
+                .WithTrailingTrivia(Whitespace("\n"));
 
-        static ConstructorDeclarationSyntax AddConstructor(BaseTypeDeclarationSyntax typeDecl, FieldDeclarationSyntax[] readonlyFields)
-        {
-            return SyntaxFactory.ConstructorDeclaration(typeDecl.Identifier.ValueText)
-                .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space))
-                .AddParameterListParameters(
-                    readonlyFields.SelectMany(field =>
-                        field.Declaration.Variables.Select(variable =>
-                            SyntaxFactory.Parameter(SyntaxFactory.Identifier(variable.Identifier.ValueText.Trim('_')))
-                                .WithType(field.Declaration.Type))).ToArray())
-                .WithBody(
-                    SyntaxFactory.Block(
-                        readonlyFields.SelectMany(field => 
-                            field.Declaration.Variables.Select(variable =>
-                                SyntaxFactory.ExpressionStatement(
-                                    SyntaxFactory.AssignmentExpression(
-                                        SyntaxKind.SimpleAssignmentExpression,
-                                        SyntaxFactory.IdentifierName($"this.{variable.Identifier.ValueText}"),
-                                        SyntaxFactory.IdentifierName(variable.Identifier.ValueText.Trim('_'))))))))
-                .WithTrailingTrivia(SyntaxFactory.Whitespace("\n"));
-        }
+        static IEnumerable<ParameterSyntax> GetConstructorParameters(IEnumerable<Field> fields)
+            => fields.Select(GetConstructorParameter);
 
+        static ParameterSyntax GetConstructorParameter(Field field)
+            => Parameter(Identifier(field.Name.AsParameter()))
+                .WithType(field.Type);
+
+        static IEnumerable<AssignmentExpressionSyntax> GetConstructorAssignments(IEnumerable<Field> fields)
+            => fields.Select(GetConstructorAssignment);
+
+        static AssignmentExpressionSyntax GetConstructorAssignment(Field field)
+            => AssignmentExpression(
+                SimpleAssignmentExpression,
+                IdentifierName($"this.{field.Name}"),
+                IdentifierName(field.Name.AsParameter()));
+
+        static ConstructorDeclarationSyntax GetConstructor(Class @class, IEnumerable<Field> fields)
+            => ConstructorDeclaration(@class.Name)
+                .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
+                .AddParameterListParameters(GetConstructorParameters(fields).ToArray())
+                .AddBodyStatements(GetConstructorAssignments(fields).Select(ExpressionStatement).ToArray())
+                .WithTrailingTrivia(Whitespace("\n"));
+
+        static ReturnStatementSyntax ReturnThis()
+            => ReturnStatement(ThisExpression().WithLeadingTrivia(Space));
+        
         static SeparatedSyntaxList<MethodDeclarationSyntax> AddWithMethods(BaseTypeDeclarationSyntax typeDecl, FieldDeclarationSyntax[] readonlyFields)
         {
-            return SyntaxFactory.SeparatedList(readonlyFields.SelectMany(field =>
+            return SeparatedList(readonlyFields.SelectMany(field =>
             {
                 return field.Declaration.Variables.Select(variable =>
                 {
                     var methodName = variable.Identifier.ValueText.Trim('_');
                     methodName = $"With{char.ToUpper(methodName[0]) + methodName.Substring(1)}";
 
-                    var returnType = SyntaxFactory.ParseTypeName(typeDecl.Identifier.ValueText).WithTrailingTrivia(SyntaxFactory.Space);
-                    var parameter = SyntaxFactory.Parameter(SyntaxFactory.Identifier("value")).WithType(field.Declaration.Type);
+                    var returnType = ParseTypeName(typeDecl.Identifier.ValueText).WithTrailingTrivia(Space);
+                    var parameter = Parameter(Identifier("value")).WithType(field.Declaration.Type);
 
-                    return SyntaxFactory.MethodDeclaration(returnType, methodName)
-                        .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space))
+                    return MethodDeclaration(returnType, methodName)
+                        .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                         .AddParameterListParameters(parameter)
                         .WithBody(
-                            SyntaxFactory.Block(
-                                SyntaxFactory.IfStatement(
-                                    SyntaxFactory.InvocationExpression(
-                                        SyntaxFactory.IdentifierName("ReferenceEquals"),
-                                        SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(new[]
+                            Block(
+                                IfStatement(
+                                    InvocationExpression(
+                                        IdentifierName("ReferenceEquals"),
+                                        ArgumentList(SeparatedList(new[]
                                         {
-                                            SyntaxFactory.Argument(
-                                                SyntaxFactory.IdentifierName("value")),
-                                            SyntaxFactory.Argument(
-                                                SyntaxFactory.IdentifierName("this." + variable.Identifier.ValueText))
+                                            Argument(
+                                                IdentifierName("value")),
+                                            Argument(
+                                                IdentifierName("this." + variable.Identifier.ValueText))
                                         }))),
+                                    
+                            ReturnThis(),
 
-                            SyntaxFactory.Block(
-                                SyntaxFactory.ReturnStatement(
-                                    SyntaxFactory.ThisExpression()
-                                                 .WithLeadingTrivia(SyntaxFactory.Space))),
-
-                            SyntaxFactory.ElseClause(
-                                SyntaxFactory.Block(
-                                    SyntaxFactory.ReturnStatement(
-                                        SyntaxFactory.ObjectCreationExpression(
-                                            SyntaxFactory.ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(SyntaxFactory.Space),
-                                            SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(
-                                                readonlyFields.SelectMany(_field =>
-                                                    _field.Declaration.Variables.Select(_variable =>
-                                                    {
-                                                        var identifier = (_variable == variable) ? "value" : "this." + _variable.Identifier.ValueText;
-                                                        return SyntaxFactory.Argument(
-                                                            SyntaxFactory.IdentifierName(identifier));
-                                                    })))),
-                                            null
-                                        ).WithLeadingTrivia(SyntaxFactory.Space)))))))
-                        .WithTrailingTrivia(SyntaxFactory.Whitespace("\n"));
+                            ElseClause(
+                                ReturnStatement(
+                                    ObjectCreationExpression(
+                                        ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(Space),
+                                        ArgumentList(SeparatedList(
+                                            readonlyFields.SelectMany(_field =>
+                                                _field.Declaration.Variables.Select(_variable =>
+                                                {
+                                                    var identifier = (_variable == variable) ? "value" : "this." + _variable.Identifier.ValueText;
+                                                    return Argument(
+                                                        IdentifierName(identifier));
+                                                })))),
+                                        null
+                                    ).WithLeadingTrivia(Space))))))
+                        .WithTrailingTrivia(Whitespace("\n"));
                 });
             }));
         }
     }
+
+    
 }
