@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 using System.Composition;
 using System.Linq;
 using System.Linq.Expressions;
@@ -14,10 +15,54 @@ using Microsoft.CodeAnalysis.Editing;
 
 namespace ImmutableClass
 {
+    public static class Extensions
+    {
+        public static string AsProperty(this string value)
+        {
+            var propertyName = value.Trim('_');
+            propertyName = char.ToUpper(propertyName[0]) + propertyName.Substring(1);
+            return propertyName;
+        }
+    }
+
+    class FieldMetadata
+    {
+        public readonly TypeSyntax Type;
+        public readonly string Name;
+
+        public FieldMetadata(TypeSyntax type, string name)
+        {
+            Type = type;
+            Name = name;
+        }
+
+        public SyntaxToken Property => SyntaxFactory.Identifier(Name.AsProperty());
+        public IdentifierNameSyntax Variable => SyntaxFactory.IdentifierName(Name);
+    }
+
+    class ClassMetadata
+    {
+        readonly TypeDeclarationSyntax _typeDecl;
+
+        public ImmutableList<IEnumerable<FieldMetadata>> ReadonlyFields;
+
+        public string Name => _typeDecl.Identifier.ValueText;
+        public TypeSyntax Type => SyntaxFactory.ParseTypeName(Name);
+
+        public ClassMetadata(TypeDeclarationSyntax typeDecl)
+        {
+            _typeDecl = typeDecl;
+
+            ReadonlyFields = typeDecl.DescendantNodes().OfType<FieldDeclarationSyntax>()
+                .Where(field => field.Modifiers.Any(modifier => modifier.Kind() == SyntaxKind.ReadOnlyKeyword))
+                .Select(field => field.Declaration.Variables.Select(variable => new FieldMetadata(field.Declaration.Type, variable.Identifier.ValueText))).ToImmutableList();
+        }
+    }
+
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ImmutableClassCodeFixProvider)), Shared]
     public class ImmutableClassCodeFixProvider : CodeFixProvider
     {
-        const string Title = "As immutable class";
+        const string Title = "As Immutable Class";
 
         public sealed override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(ImmutableClassAnalyzer.DiagnosticId);
 
@@ -42,40 +87,30 @@ namespace ImmutableClass
 
         static async Task<Solution> MakeImmutableAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
         {
-            var fields = typeDecl.DescendantNodes().OfType<FieldDeclarationSyntax>();
-            var readonlyFields = fields.Where(field => field.Modifiers.Any(modifier => modifier.Kind() == SyntaxKind.ReadOnlyKeyword)).ToArray();
+            var metadata = new ClassMetadata(typeDecl);
 
             var documentEditor = await DocumentEditor.CreateAsync(document, cancellationToken);
             
-            var properties = AddProperties(readonlyFields);
-            var constructor = AddConstructor(typeDecl, readonlyFields);
-            var methods = AddWithMethods(typeDecl, readonlyFields);
+            var properties = AddProperties(metadata);
+            var constructor = AddConstructor(typeDecl, metadata);
+            var methods = AddWithMethods(typeDecl, metadata);
 
-            documentEditor.InsertAfter(readonlyFields.Last(), properties);
+            documentEditor.InsertAfter(metadata.ReadonlyFields.Last(), properties);
             documentEditor.InsertAfter(readonlyFields.Last(), constructor);
             documentEditor.InsertAfter(readonlyFields.Last(), methods);
 
             return document.Project.Solution.WithDocumentText(document.Id, await documentEditor.GetChangedDocument().GetTextAsync(cancellationToken));
         }
 
-        static SeparatedSyntaxList<PropertyDeclarationSyntax> AddProperties(FieldDeclarationSyntax[] readonlyFields)
+        static SeparatedSyntaxList<PropertyDeclarationSyntax> AddProperties(ClassMetadata @classMetadata)
         {
-            return SyntaxFactory.SeparatedList(readonlyFields.SelectMany(field =>
-               {
-                   var fieldType = field.Declaration.Type;
-                   return field.Declaration.Variables.Select(variable =>
-                   {
-                       var variableName = variable.Identifier.ValueText;
-                       var propertyName = variableName.Trim('_');
-                       propertyName = char.ToUpper(propertyName[0]) + propertyName.Substring(1);
-
-                       return SyntaxFactory.PropertyDeclaration(fieldType, SyntaxFactory.Identifier(propertyName))
-                           .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space))
-                           .WithExpressionBody(SyntaxFactory.ArrowExpressionClause(SyntaxFactory.IdentifierName(variableName)))
-                           .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
-                           .WithTrailingTrivia(SyntaxFactory.Whitespace("\n"));
-                   });
-               }));
+            return SyntaxFactory.SeparatedList(classMetadata.ReadonlyFields.SelectMany(variables =>
+                variables.Select(variable =>
+                    SyntaxFactory.PropertyDeclaration(variable.Type, variable.Property)
+                        .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space))
+                        .WithExpressionBody(SyntaxFactory.ArrowExpressionClause(variable.Variable))
+                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
+                        .WithTrailingTrivia(SyntaxFactory.Whitespace("\n")))));
         }
 
         static ConstructorDeclarationSyntax AddConstructor(BaseTypeDeclarationSyntax typeDecl, FieldDeclarationSyntax[] readonlyFields)
