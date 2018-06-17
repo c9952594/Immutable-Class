@@ -11,56 +11,18 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
+using Microsoft.CodeAnalysis.Host;
 using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
 using static Microsoft.CodeAnalysis.CSharp.SyntaxKind;
 
 
 namespace ImmutableClass
 {
-    internal static class Extensions
-    {
-        public static string AsProperty(this string name)
-        {
-            var propertyName = name.Trim('_');
-            propertyName = char.ToUpper(propertyName[0]) + propertyName.Substring(1);
-            return propertyName;
-        }
-
-        public static string AsParameter(this string name)
-        {
-            return name.Trim('_');
-        }
-    }
-
-    internal class Field
-    {
-        public readonly string Name;
-        public readonly TypeSyntax Type;
-
-        public Field(TypeSyntax type, string valueText)
-        {
-            Type = type;
-            Name = valueText;
-        }
-    }
-
-    internal class Class
-    {
-        public readonly string Name;
-        public readonly TypeSyntax Type;
-
-        public Class(string name)
-        {
-            Type = ParseTypeName(name);
-            Name = name;
-        }
-    }
-
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ImmutableClassCodeFixProvider))]
     [Shared]
     public class ImmutableClassCodeFixProvider : CodeFixProvider
     {
-        private const string Title = "As immutable class";
+        const string Title = "As immutable class";
 
         public sealed override ImmutableArray<string> FixableDiagnosticIds =>
             ImmutableArray.Create(ImmutableClassAnalyzer.DiagnosticId);
@@ -88,48 +50,109 @@ namespace ImmutableClass
                 diagnostic);
         }
 
-        private static async Task<Solution> MakeImmutableAsync(Document document, TypeDeclarationSyntax typeDecl,
-            CancellationToken cancellationToken)
+        static async Task<Solution> MakeImmutableAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
         {
             var fieldDeclarations = typeDecl.DescendantNodes().OfType<FieldDeclarationSyntax>();
             var readonlyFieldDeclarations = fieldDeclarations
                 .Where(field => field.Modifiers.Any(modifier => modifier.Kind() == ReadOnlyKeyword)).ToArray();
-
-            var semanticModel = document.GetSemanticModelAsync(cancellationToken).Result;
-
 
             var @class = new Class(typeDecl.Identifier.ValueText);
 
             var fields = readonlyFieldDeclarations.SelectMany(field =>
                 field.Declaration.Variables.Select(variable =>
                     new Field(field.Declaration.Type, variable.Identifier.ValueText))).ToArray();
-            
+
             var documentEditor = await DocumentEditor.CreateAsync(document, cancellationToken);
 
             var properties = GetProperties(fields).ToArray();
             var constructor = GetConstructor(@class, fields);
-            //var methods = AddWithMethods(typeDecl, readonlyFieldDeclarations);
+            var method = GetWith(@class, fields);
+            var optional = GetOptional();
 
-            var surroundedByRegion = SurroundWithRegion(properties, constructor);
+            var all = List<MemberDeclarationSyntax>(properties).Add(constructor).Add(method).Add(optional).ToArray();
+            var surroundedByRegion = SurroundWithRegion(all);
+
             documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), surroundedByRegion);
 
-            return document.Project.Solution.WithDocumentText(document.Id,
+            return document.Project.Solution.WithDocumentText(
+                document.Id,
                 await documentEditor.GetChangedDocument().GetTextAsync(cancellationToken));
         }
 
-        private static IEnumerable<MemberDeclarationSyntax> SurroundWithRegion(PropertyDeclarationSyntax[] properties,
-            ConstructorDeclarationSyntax constructor)
+        static StructDeclarationSyntax GetOptional()
+            => StructDeclaration("Optional")
+                .WithModifiers(TokenList(Token(PublicKeyword)))
+                .WithTypeParameterList(
+                    TypeParameterList(SingletonSeparatedList(TypeParameter(Identifier("T")))))
+                .WithMembers(List(new MemberDeclarationSyntax[]
+                {
+                    PropertyDeclaration(IdentifierName("T"), Identifier("Value"))
+                        .WithModifiers(TokenList(Token(PublicKeyword))).WithAccessorList(
+                            AccessorList(SingletonList(
+                                AccessorDeclaration(GetAccessorDeclaration)
+                                    .WithSemicolonToken(Token(SemicolonToken))))),
+                    PropertyDeclaration(PredefinedType(Token(BoolKeyword)), Identifier("HasValue"))
+                        .WithModifiers(TokenList(Token(PublicKeyword)))
+                        .WithAccessorList(AccessorList(SingletonList(
+                            AccessorDeclaration(GetAccessorDeclaration).WithSemicolonToken(Token(SemicolonToken))))),
+                    ConstructorDeclaration(Identifier("Optional")).WithModifiers(TokenList(Token(PublicKeyword)))
+                        .WithParameterList(ParameterList(
+                            SingletonSeparatedList(Parameter(Identifier("value"))
+                                .WithType(IdentifierName("T"))))).WithBody(Block(
+                            ExpressionStatement(AssignmentExpression(SimpleAssignmentExpression,
+                                IdentifierName("Value"), IdentifierName("value"))),
+                            ExpressionStatement(AssignmentExpression(SimpleAssignmentExpression,
+                                IdentifierName("HasValue"), LiteralExpression(TrueLiteralExpression))))),
+                    ConversionOperatorDeclaration(Token(ExplicitKeyword), IdentifierName("T"))
+                        .WithModifiers(TokenList(Token(PublicKeyword), Token(StaticKeyword)))
+                        .WithParameterList(ParameterList(SingletonSeparatedList(
+                            Parameter(Identifier("optional")).WithType(GenericName(Identifier("Optional"))
+                                .WithTypeArgumentList(
+                                    TypeArgumentList(SingletonSeparatedList<TypeSyntax>(IdentifierName("T"))))))))
+                        .WithExpressionBody(ArrowExpressionClause(MemberAccessExpression(SimpleMemberAccessExpression,
+                            IdentifierName("optional"), IdentifierName("Value"))))
+                        .WithSemicolonToken(Token(SemicolonToken)),
+                    ConversionOperatorDeclaration(Token(ImplicitKeyword),
+                            GenericName(Identifier("Optional"))
+                                .WithTypeArgumentList(
+                                    TypeArgumentList(SingletonSeparatedList<TypeSyntax>(IdentifierName("T")))))
+                        .WithModifiers(TokenList(Token(PublicKeyword), Token(StaticKeyword)))
+                        .WithParameterList(ParameterList(
+                            SingletonSeparatedList(Parameter(Identifier("value"))
+                                .WithType(IdentifierName("T"))))).WithExpressionBody(ArrowExpressionClause(
+                            ObjectCreationExpression(GenericName(Identifier("Optional"))
+                                    .WithTypeArgumentList(
+                                        TypeArgumentList(SingletonSeparatedList<TypeSyntax>(IdentifierName("T")))))
+                                .WithArgumentList(
+                                    ArgumentList(
+                                        SingletonSeparatedList(Argument(IdentifierName("value")))))))
+                        .WithSemicolonToken(Token(SemicolonToken)),
+                    MethodDeclaration(PredefinedType(Token(StringKeyword)), Identifier("ToString"))
+                        .WithModifiers(TokenList(Token(PublicKeyword), Token(OverrideKeyword)))
+                        .WithExpressionBody(ArrowExpressionClause(
+                            InterpolatedStringExpression(Token(InterpolatedStringStartToken)).WithContents(
+                                List(new InterpolatedStringContentSyntax[]
+                                {
+                                    InterpolatedStringText().WithTextToken(Token(TriviaList(),
+                                        InterpolatedStringTextToken, "Optional (HasValue: ", "Optional (HasValue: ",
+                                        TriviaList())),
+                                    Interpolation(IdentifierName("HasValue")),
+                                    InterpolatedStringText().WithTextToken(Token(TriviaList(),
+                                        InterpolatedStringTextToken, ", Value: '", ", Value: '", TriviaList())),
+                                    Interpolation(IdentifierName("Value")),
+                                    InterpolatedStringText().WithTextToken(Token(TriviaList(),
+                                        InterpolatedStringTextToken, "')", "')", TriviaList()))
+                                })))).WithSemicolonToken(Token(SemicolonToken))
+                })).NormalizeWhitespace().WithLeadingTrivia(CarriageReturnLineFeed);
+
+        static IEnumerable<MemberDeclarationSyntax> SurroundWithRegion(MemberDeclarationSyntax[] all)
         {
-            const string regionText = @"Generated code: Immutable class";
-
-            var all = List<MemberDeclarationSyntax>(properties).Add(constructor).ToArray();
-
             all[0] = all[0].WithLeadingTrivia(
                 Trivia(RegionDirectiveTrivia(true)
                     .WithHashToken(Token(HashToken))
                     .WithRegionKeyword(Token(RegionKeyword)).WithEndOfDirectiveToken(
                         Token(
-                            TriviaList(Space, PreprocessingMessage(regionText)),
+                            TriviaList(Space, PreprocessingMessage(@"Generated code: Immutable class")),
                             EndOfDirectiveToken,
                             TriviaList()))),
                 CarriageReturnLineFeed
@@ -137,120 +160,136 @@ namespace ImmutableClass
 
             all[all.Length - 1] = all[all.Length - 1].WithTrailingTrivia(
                 Trivia(
-                    EndRegionDirectiveTrivia(true).WithLeadingTrivia(CarriageReturnLineFeed)
+                    EndRegionDirectiveTrivia(true)
+                        .WithLeadingTrivia(CarriageReturnLineFeed)
                         .WithTrailingTrivia(CarriageReturnLineFeed)));
 
             return all;
         }
 
-        private static IEnumerable<PropertyDeclarationSyntax> GetProperties(IEnumerable<Field> fields)
-        {
-            return fields.Select(GetProperty);
-        }
+        static IEnumerable<PropertyDeclarationSyntax> GetProperties(IEnumerable<Field> fields)
+            => fields.Select(GetProperty);
 
-        private static PropertyDeclarationSyntax GetProperty(Field field)
-        {
-            return PropertyDeclaration(field.Type, field.Name.AsProperty())
+        static PropertyDeclarationSyntax GetProperty(Field field)
+            => PropertyDeclaration(field.Type, field.Name.AsProperty())
                 .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                 .WithExpressionBody(ArrowExpressionClause(IdentifierName(field.Name)))
                 .WithSemicolonToken(Token(SemicolonToken))
-                .WithTrailingTrivia(Whitespace("\n"));
-        }
+                .WithTrailingTrivia(CarriageReturnLineFeed);
 
-        private static IEnumerable<ParameterSyntax> GetConstructorParameters(IEnumerable<Field> fields)
-        {
-            return fields.Select(GetConstructorParameter);
-        }
+        static IEnumerable<ParameterSyntax> GetConstructorParameters(IEnumerable<Field> fields)
+            => fields.Select(GetConstructorParameter);
 
-        private static ParameterSyntax GetConstructorParameter(Field field)
-        {
-            return Parameter(Identifier(field.Name.AsParameter()))
+        static ParameterSyntax GetConstructorParameter(Field field)
+            => Parameter(Identifier(field.Name.AsParameter()))
                 .WithType(field.Type);
-        }
 
-        private static IEnumerable<AssignmentExpressionSyntax> GetConstructorAssignments(IEnumerable<Field> fields)
-        {
-            return fields.Select(GetConstructorAssignment);
-        }
+        static IEnumerable<AssignmentExpressionSyntax> GetConstructorAssignments(IEnumerable<Field> fields)
+            => fields.Select(GetConstructorAssignment);
 
-        private static AssignmentExpressionSyntax GetConstructorAssignment(Field field)
-        {
-            return AssignmentExpression(
+        static AssignmentExpressionSyntax GetConstructorAssignment(Field field)
+            => AssignmentExpression(
                 SimpleAssignmentExpression,
                 IdentifierName($"this.{field.Name}"),
                 IdentifierName(field.Name.AsParameter()));
-        }
 
-        private static ConstructorDeclarationSyntax GetConstructor(Class @class, IEnumerable<Field> fields)
-        {
-            return ConstructorDeclaration(@class.Name)
+        static ConstructorDeclarationSyntax GetConstructor(Class @class, IEnumerable<Field> fields)
+            => ConstructorDeclaration(@class.Name)
                 .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                 .AddParameterListParameters(GetConstructorParameters(fields).ToArray())
                 .AddBodyStatements(GetConstructorAssignments(fields).Select(ExpressionStatement).ToArray())
                 .WithTrailingTrivia(CarriageReturnLineFeed);
-        }
 
-        private static ReturnStatementSyntax ReturnThis()
+        static MethodDeclarationSyntax GetWith(Class @class, IEnumerable<Field> fields)
         {
-            return ReturnStatement(ThisExpression().WithLeadingTrivia(Space));
+            return MethodDeclaration(@class.Type.WithTrailingTrivia(Space), "With")
+                .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
+                .AddParameterListParameters(GetWithParameters(fields).ToArray())
+                .WithBody(Block(
+                    GetWithReturnIfSame(fields)//,
+                    //GetWithNew(fields)
+                    ));
         }
 
-        private static SeparatedSyntaxList<MethodDeclarationSyntax> AddWithMethods(BaseTypeDeclarationSyntax typeDecl,
-            FieldDeclarationSyntax[] readonlyFields)
+        static StatementSyntax GetWithReturnIfSame(IEnumerable<Field> fields)
         {
-            return SeparatedList(readonlyFields.SelectMany(field =>
-            {
-                return field.Declaration.Variables.Select(variable =>
-                {
-                    var methodName = variable.Identifier.ValueText.Trim('_');
-                    methodName = $"With{char.ToUpper(methodName[0]) + methodName.Substring(1)}";
-
-                    var returnType = ParseTypeName(typeDecl.Identifier.ValueText).WithTrailingTrivia(Space);
-                    var parameter = Parameter(Identifier("value")).WithType(field.Declaration.Type);
-
-                    return MethodDeclaration(returnType, methodName)
-                        .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
-                        .AddParameterListParameters(parameter)
-                        .WithBody(
-                            Block(
-                                IfStatement(
-                                    InvocationExpression(
-                                        IdentifierName("ReferenceEquals"),
-                                        ArgumentList(SeparatedList(new[]
-                                        {
-                                            Argument(
-                                                IdentifierName("value")),
-                                            Argument(
-                                                IdentifierName("this." + variable.Identifier.ValueText))
-                                        }))
-                                    ),
-                                    ReturnThis(),
-                                    ElseClause(
-                                        ReturnStatement(
-                                            ObjectCreationExpression(
-                                                ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(Space),
-                                                ArgumentList(SeparatedList(
-                                                        readonlyFields.SelectMany(_field =>
-                                                            _field.Declaration.Variables.Select(_variable =>
-                                                            {
-                                                                var identifier = _variable == variable
-                                                                    ? "value"
-                                                                    : "this." + _variable.Identifier.ValueText;
-                                                                return Argument(
-                                                                    IdentifierName(identifier));
-                                                            })
-                                                        )
-                                                    )
-                                                ),
-                                                null
-                                            ).WithLeadingTrivia(Space))
-                                    )
-                                )
-                            )
-                        )
-                        .WithTrailingTrivia(CarriageReturnLineFeed);
-                });
-            }));
+            return Block(
+                IfStatement(
+                    BinaryExpression(LogicalAndExpression,
+                        MemberAccessExpression(SimpleMemberAccessExpression, IdentifierName("value1"),
+                            IdentifierName("HasValue")),
+                        MemberAccessExpression(SimpleMemberAccessExpression, IdentifierName("value2"),
+                            IdentifierName("HasValue"))), ReturnStatement(ThisExpression().WithLeadingTrivia(Space)).WithLeadingTrivia(Space)),
+                ReturnStatement(LiteralExpression(NullLiteralExpression).WithLeadingTrivia(Space)));
         }
+
+        static StatementSyntax GetWithNew(IEnumerable<Field> fields)
+        {
+            throw new NotImplementedException();
+        }
+
+        static IEnumerable<ParameterSyntax> GetWithParameters(IEnumerable<Field> fields)
+            => fields.Select(GetWithParameter);
+
+        static ParameterSyntax GetWithParameter(Field field)
+            => Parameter(Identifier(field.Name.AsParameter()))
+                .WithType(ParseTypeName($"Optional<{field.Type}>"))
+                .WithDefault(
+                    EqualsValueClause(
+                        DefaultExpression(
+                            IdentifierName($"Optional<{field.Type}>"))));
+
+
+        //static SeparatedSyntaxList<MethodDeclarationSyntax> AddWithMethods(BaseTypeDeclarationSyntax typeDecl, FieldDeclarationSyntax[] readonlyFields)
+        //{
+        //    return SeparatedList(readonlyFields.SelectMany(field =>
+        //    {
+        //        return field.Declaration.Variables.Select(variable =>
+        //        {
+        //            return MethodDeclaration(returnType: ParseTypeName(typeDecl.Identifier.ValueText).WithTrailingTrivia(Space),
+        //                                     identifier: $"With{variable.Identifier.ValueText.AsProperty()}")
+        //                .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
+        //                .AddParameterListParameters(Parameter(Identifier("value")).WithType(field.Declaration.Type))
+        //                .WithBody(
+        //                    Block(
+        //                        IfStatement(
+        //                            InvocationExpression(
+        //                                IdentifierName("ReferenceEquals"),
+        //                                ArgumentList(SeparatedList(new[]
+        //                                {
+        //                                    Argument(
+        //                                        IdentifierName("value")),
+        //                                    Argument(
+        //                                        IdentifierName("this." + variable.Identifier.ValueText))
+        //                                }))
+        //                            ),
+        //                            ReturnThis(),
+        //                            ElseClause(
+        //                                ReturnStatement(
+        //                                    ObjectCreationExpression(
+        //                                        ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(Space),
+        //                                        ArgumentList(SeparatedList(
+        //                                                readonlyFields.SelectMany(_field =>
+        //                                                    _field.Declaration.Variables.Select(_variable =>
+        //                                                    {
+        //                                                        var identifier = _variable == variable
+        //                                                            ? "value"
+        //                                                            : "this." + _variable.Identifier.ValueText;
+        //                                                        return Argument(
+        //                                                            IdentifierName(identifier));
+        //                                                    })
+        //                                                )
+        //                                            )
+        //                                        ),
+        //                                        null
+        //                                    ).WithLeadingTrivia(Space))
+        //                            )
+        //                        )
+        //                    )
+        //                )
+        //                .WithTrailingTrivia(CarriageReturnLineFeed);
+        //        });
+        //    }));
+        //}
     }
 }
