@@ -37,8 +37,8 @@ namespace ImmutableClass
 
         public Field(TypeSyntax type, string valueText)
         {
-            this.Type = type;
-            this.Name = valueText;
+            Type = type;
+            Name = valueText;
         }
     }
 
@@ -49,8 +49,8 @@ namespace ImmutableClass
 
         public Class(string name)
         {
-            this.Type = ParseTypeName(name);
-            this.Name = name;
+            Type = ParseTypeName(name);
+            Name = name;
         }
     }
 
@@ -89,22 +89,43 @@ namespace ImmutableClass
 
             var fields = readonlyFieldDeclarations.SelectMany(field => 
                 field.Declaration.Variables.Select(variable => 
-                    new Field(field.Declaration.Type, variable.Identifier.ValueText)));
+                    new Field(field.Declaration.Type, variable.Identifier.ValueText))).ToArray();
             
             var documentEditor = await DocumentEditor.CreateAsync(document, cancellationToken);
 
-            var properties = GetProperties(fields);
+            var properties = GetProperties(fields).ToArray();
             var constructor = GetConstructor(@class, fields);
             //var methods = AddWithMethods(typeDecl, readonlyFieldDeclarations);
             
-            documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), properties);
-            documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), constructor);
-            
-            
-
-            //documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), methods);
+            var surroundedByRegion = SurroundWithRegion(properties, constructor);
+            documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), surroundedByRegion);
 
             return document.Project.Solution.WithDocumentText(document.Id, await documentEditor.GetChangedDocument().GetTextAsync(cancellationToken));
+        }
+
+        private static IEnumerable<MemberDeclarationSyntax> SurroundWithRegion(PropertyDeclarationSyntax[] properties, ConstructorDeclarationSyntax constructor)
+        {
+            const string regionText = @"Generated code: Immutable class";
+
+            var all = List<MemberDeclarationSyntax>(properties).Add(constructor).ToArray();
+
+            all[0] = all[0].WithLeadingTrivia(
+                Trivia(RegionDirectiveTrivia(true)
+                    .WithHashToken(Token(HashToken))
+                    .WithRegionKeyword(Token(RegionKeyword)).WithEndOfDirectiveToken(
+                        Token(
+                            TriviaList(Space, PreprocessingMessage(regionText)),
+                            EndOfDirectiveToken,
+                            TriviaList()))),
+                CarriageReturnLineFeed
+            );
+
+            all[all.Length - 1] = all[all.Length - 1].WithTrailingTrivia(
+                Trivia(
+                    EndRegionDirectiveTrivia(true).WithLeadingTrivia(CarriageReturnLineFeed)
+                        .WithTrailingTrivia(CarriageReturnLineFeed)));
+
+            return all;
         }
 
         static IEnumerable<PropertyDeclarationSyntax> GetProperties(IEnumerable<Field> fields) 
@@ -138,7 +159,7 @@ namespace ImmutableClass
                 .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                 .AddParameterListParameters(GetConstructorParameters(fields).ToArray())
                 .AddBodyStatements(GetConstructorAssignments(fields).Select(ExpressionStatement).ToArray())
-                .WithTrailingTrivia(Whitespace("\n"));
+                .WithTrailingTrivia(CarriageReturnLineFeed);
 
         static ReturnStatementSyntax ReturnThis()
             => ReturnStatement(ThisExpression().WithLeadingTrivia(Space));
@@ -187,7 +208,7 @@ namespace ImmutableClass
                                                 })))),
                                         null
                                     ).WithLeadingTrivia(Space))))))
-                        .WithTrailingTrivia(Whitespace("\n"));
+                        .WithTrailingTrivia(CarriageReturnLineFeed);
                 });
             }));
         }
