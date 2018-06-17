@@ -1,24 +1,26 @@
+using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CodeActions;
+using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
-using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
-using static Microsoft.CodeAnalysis.CSharp.SyntaxKind;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
-using System.Collections.Generic;
+using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
+using static Microsoft.CodeAnalysis.CSharp.SyntaxKind;
 
 
 namespace ImmutableClass
 {
-    static class Extensions
+    internal static class Extensions
     {
-        public static string AsProperty(this string name) {
+        public static string AsProperty(this string name)
+        {
             var propertyName = name.Trim('_');
             propertyName = char.ToUpper(propertyName[0]) + propertyName.Substring(1);
             return propertyName;
@@ -32,8 +34,8 @@ namespace ImmutableClass
 
     internal class Field
     {
-        public readonly TypeSyntax Type;
         public readonly string Name;
+        public readonly TypeSyntax Type;
 
         public Field(TypeSyntax type, string valueText)
         {
@@ -44,8 +46,8 @@ namespace ImmutableClass
 
     internal class Class
     {
-        public readonly TypeSyntax Type;
         public readonly string Name;
+        public readonly TypeSyntax Type;
 
         public Class(string name)
         {
@@ -54,14 +56,19 @@ namespace ImmutableClass
         }
     }
 
-    [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ImmutableClassCodeFixProvider)), Shared]
+    [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ImmutableClassCodeFixProvider))]
+    [Shared]
     public class ImmutableClassCodeFixProvider : CodeFixProvider
     {
-        const string Title = "As immutable class";
+        private const string Title = "As immutable class";
 
-        public sealed override ImmutableArray<string> FixableDiagnosticIds => ImmutableArray.Create(ImmutableClassAnalyzer.DiagnosticId);
+        public sealed override ImmutableArray<string> FixableDiagnosticIds =>
+            ImmutableArray.Create(ImmutableClassAnalyzer.DiagnosticId);
 
-        public sealed override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
+        public sealed override FixAllProvider GetFixAllProvider()
+        {
+            return WellKnownFixAllProviders.BatchFixer;
+        }
 
         public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
         {
@@ -70,25 +77,31 @@ namespace ImmutableClass
             var diagnostic = context.Diagnostics.First();
             var diagnosticSpan = diagnostic.Location.SourceSpan;
 
-            var declaration = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().First();
+            var declaration = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf()
+                .OfType<TypeDeclarationSyntax>().First();
 
             context.RegisterCodeFix(
                 CodeAction.Create(
-                    title: Title,
-                    createChangedSolution: c => MakeImmutableAsync(context.Document, declaration, c), 
-                    equivalenceKey: Title),
+                    Title,
+                    c => MakeImmutableAsync(context.Document, declaration, c),
+                    Title),
                 diagnostic);
         }
 
-        static async Task<Solution> MakeImmutableAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
+        private static async Task<Solution> MakeImmutableAsync(Document document, TypeDeclarationSyntax typeDecl,
+            CancellationToken cancellationToken)
         {
             var fieldDeclarations = typeDecl.DescendantNodes().OfType<FieldDeclarationSyntax>();
-            var readonlyFieldDeclarations = fieldDeclarations.Where(field => field.Modifiers.Any(modifier => modifier.Kind() == ReadOnlyKeyword)).ToArray();
+            var readonlyFieldDeclarations = fieldDeclarations
+                .Where(field => field.Modifiers.Any(modifier => modifier.Kind() == ReadOnlyKeyword)).ToArray();
+
+            var semanticModel = document.GetSemanticModelAsync(cancellationToken).Result;
+
 
             var @class = new Class(typeDecl.Identifier.ValueText);
 
-            var fields = readonlyFieldDeclarations.SelectMany(field => 
-                field.Declaration.Variables.Select(variable => 
+            var fields = readonlyFieldDeclarations.SelectMany(field =>
+                field.Declaration.Variables.Select(variable =>
                     new Field(field.Declaration.Type, variable.Identifier.ValueText))).ToArray();
             
             var documentEditor = await DocumentEditor.CreateAsync(document, cancellationToken);
@@ -96,14 +109,16 @@ namespace ImmutableClass
             var properties = GetProperties(fields).ToArray();
             var constructor = GetConstructor(@class, fields);
             //var methods = AddWithMethods(typeDecl, readonlyFieldDeclarations);
-            
+
             var surroundedByRegion = SurroundWithRegion(properties, constructor);
             documentEditor.InsertAfter(readonlyFieldDeclarations.Last(), surroundedByRegion);
 
-            return document.Project.Solution.WithDocumentText(document.Id, await documentEditor.GetChangedDocument().GetTextAsync(cancellationToken));
+            return document.Project.Solution.WithDocumentText(document.Id,
+                await documentEditor.GetChangedDocument().GetTextAsync(cancellationToken));
         }
 
-        private static IEnumerable<MemberDeclarationSyntax> SurroundWithRegion(PropertyDeclarationSyntax[] properties, ConstructorDeclarationSyntax constructor)
+        private static IEnumerable<MemberDeclarationSyntax> SurroundWithRegion(PropertyDeclarationSyntax[] properties,
+            ConstructorDeclarationSyntax constructor)
         {
             const string regionText = @"Generated code: Immutable class";
 
@@ -128,43 +143,60 @@ namespace ImmutableClass
             return all;
         }
 
-        static IEnumerable<PropertyDeclarationSyntax> GetProperties(IEnumerable<Field> fields) 
-            => fields.Select(GetProperty);
+        private static IEnumerable<PropertyDeclarationSyntax> GetProperties(IEnumerable<Field> fields)
+        {
+            return fields.Select(GetProperty);
+        }
 
-        static PropertyDeclarationSyntax GetProperty(Field field) 
-            => PropertyDeclaration(field.Type, field.Name.AsProperty())
+        private static PropertyDeclarationSyntax GetProperty(Field field)
+        {
+            return PropertyDeclaration(field.Type, field.Name.AsProperty())
                 .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                 .WithExpressionBody(ArrowExpressionClause(IdentifierName(field.Name)))
                 .WithSemicolonToken(Token(SemicolonToken))
                 .WithTrailingTrivia(Whitespace("\n"));
+        }
 
-        static IEnumerable<ParameterSyntax> GetConstructorParameters(IEnumerable<Field> fields)
-            => fields.Select(GetConstructorParameter);
+        private static IEnumerable<ParameterSyntax> GetConstructorParameters(IEnumerable<Field> fields)
+        {
+            return fields.Select(GetConstructorParameter);
+        }
 
-        static ParameterSyntax GetConstructorParameter(Field field)
-            => Parameter(Identifier(field.Name.AsParameter()))
+        private static ParameterSyntax GetConstructorParameter(Field field)
+        {
+            return Parameter(Identifier(field.Name.AsParameter()))
                 .WithType(field.Type);
+        }
 
-        static IEnumerable<AssignmentExpressionSyntax> GetConstructorAssignments(IEnumerable<Field> fields)
-            => fields.Select(GetConstructorAssignment);
+        private static IEnumerable<AssignmentExpressionSyntax> GetConstructorAssignments(IEnumerable<Field> fields)
+        {
+            return fields.Select(GetConstructorAssignment);
+        }
 
-        static AssignmentExpressionSyntax GetConstructorAssignment(Field field)
-            => AssignmentExpression(
+        private static AssignmentExpressionSyntax GetConstructorAssignment(Field field)
+        {
+            return AssignmentExpression(
                 SimpleAssignmentExpression,
                 IdentifierName($"this.{field.Name}"),
                 IdentifierName(field.Name.AsParameter()));
+        }
 
-        static ConstructorDeclarationSyntax GetConstructor(Class @class, IEnumerable<Field> fields)
-            => ConstructorDeclaration(@class.Name)
+        private static ConstructorDeclarationSyntax GetConstructor(Class @class, IEnumerable<Field> fields)
+        {
+            return ConstructorDeclaration(@class.Name)
                 .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                 .AddParameterListParameters(GetConstructorParameters(fields).ToArray())
                 .AddBodyStatements(GetConstructorAssignments(fields).Select(ExpressionStatement).ToArray())
                 .WithTrailingTrivia(CarriageReturnLineFeed);
+        }
 
-        static ReturnStatementSyntax ReturnThis()
-            => ReturnStatement(ThisExpression().WithLeadingTrivia(Space));
-        
-        static SeparatedSyntaxList<MethodDeclarationSyntax> AddWithMethods(BaseTypeDeclarationSyntax typeDecl, FieldDeclarationSyntax[] readonlyFields)
+        private static ReturnStatementSyntax ReturnThis()
+        {
+            return ReturnStatement(ThisExpression().WithLeadingTrivia(Space));
+        }
+
+        private static SeparatedSyntaxList<MethodDeclarationSyntax> AddWithMethods(BaseTypeDeclarationSyntax typeDecl,
+            FieldDeclarationSyntax[] readonlyFields)
         {
             return SeparatedList(readonlyFields.SelectMany(field =>
             {
@@ -190,29 +222,35 @@ namespace ImmutableClass
                                                 IdentifierName("value")),
                                             Argument(
                                                 IdentifierName("this." + variable.Identifier.ValueText))
-                                        }))),
-                                    
-                            ReturnThis(),
-
-                            ElseClause(
-                                ReturnStatement(
-                                    ObjectCreationExpression(
-                                        ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(Space),
-                                        ArgumentList(SeparatedList(
-                                            readonlyFields.SelectMany(_field =>
-                                                _field.Declaration.Variables.Select(_variable =>
-                                                {
-                                                    var identifier = (_variable == variable) ? "value" : "this." + _variable.Identifier.ValueText;
-                                                    return Argument(
-                                                        IdentifierName(identifier));
-                                                })))),
-                                        null
-                                    ).WithLeadingTrivia(Space))))))
+                                        }))
+                                    ),
+                                    ReturnThis(),
+                                    ElseClause(
+                                        ReturnStatement(
+                                            ObjectCreationExpression(
+                                                ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(Space),
+                                                ArgumentList(SeparatedList(
+                                                        readonlyFields.SelectMany(_field =>
+                                                            _field.Declaration.Variables.Select(_variable =>
+                                                            {
+                                                                var identifier = _variable == variable
+                                                                    ? "value"
+                                                                    : "this." + _variable.Identifier.ValueText;
+                                                                return Argument(
+                                                                    IdentifierName(identifier));
+                                                            })
+                                                        )
+                                                    )
+                                                ),
+                                                null
+                                            ).WithLeadingTrivia(Space))
+                                    )
+                                )
+                            )
+                        )
                         .WithTrailingTrivia(CarriageReturnLineFeed);
                 });
             }));
         }
     }
-
-    
 }
