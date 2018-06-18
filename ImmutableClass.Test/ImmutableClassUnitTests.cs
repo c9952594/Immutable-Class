@@ -36,6 +36,7 @@ namespace ImmutableClass.Test
         {   
             readonly string _value1;
             readonly string _value2;
+            readonly StringBuilder _value3;
         }
     }";
             var expected = new DiagnosticResult

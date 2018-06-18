@@ -202,32 +202,59 @@ namespace ImmutableClass
 
         static MethodDeclarationSyntax GetWith(Class @class, IEnumerable<Field> fields)
         {
+            var locals = fields.Select((field, index) =>
+                LocalDeclarationStatement(VariableDeclaration(IdentifierName("var")).WithVariables(
+                    SingletonSeparatedList(VariableDeclarator(Identifier($"__local{index}").WithLeadingTrivia(Space))
+                        .WithInitializer(EqualsValueClause(ConditionalExpression(
+                            MemberAccessExpression(SimpleMemberAccessExpression,
+                                IdentifierName(field.Name.AsParameter()), IdentifierName("HasValue")),
+                            MemberAccessExpression(SimpleMemberAccessExpression,
+                                IdentifierName(field.Name.AsParameter()), IdentifierName("Value")),
+                            MemberAccessExpression(SimpleMemberAccessExpression, ThisExpression(),
+                                IdentifierName(field.Name)))))))));
+
+            var invocationExpressions = fields.Select((field, index) =>
+                InvocationExpression(IdentifierName("ReferenceEquals")).WithArgumentList(ArgumentList(
+                    SeparatedList<ArgumentSyntax>(new SyntaxNodeOrToken[]
+                    {
+                        Argument(IdentifierName($"__local{index}")), Token(CommaToken),
+                        Argument(MemberAccessExpression(SimpleMemberAccessExpression,
+                            ThisExpression(), IdentifierName(field.Name)))
+                    }))));
+
+            var ifStatement =
+                IfStatement(
+                    Condition(invocationExpressions.ToArray()),
+                    ReturnStatement(ThisExpression().WithLeadingTrivia(Space)));
+
+            var constructorArguments = fields.SelectMany((_, index) => new SyntaxNodeOrToken[] { Argument(IdentifierName($"__local{index}")), Token(CommaToken) } ).ToList();
+            constructorArguments.RemoveAt(constructorArguments.Count - 1);
+
+            var returnStatement = ReturnStatement(ObjectCreationExpression(IdentifierName(@class.Name).WithLeadingTrivia(Space)).WithArgumentList(
+                ArgumentList(SeparatedList<ArgumentSyntax>(
+                    constructorArguments))).WithLeadingTrivia(Space));
+
+            var block = new List<StatementSyntax>(locals) {ifStatement, returnStatement};
+
             return MethodDeclaration(@class.Type.WithTrailingTrivia(Space), "With")
                 .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
                 .AddParameterListParameters(GetWithParameters(fields).ToArray())
-                .WithBody(Block(
-                    GetWithReturnIfSame(fields)//,
-                    //GetWithNew(fields)
-                    ));
-        }
+                .WithBody(Block(block));
 
-        static StatementSyntax GetWithReturnIfSame(IEnumerable<Field> fields)
-        {
-            return Block(
-                IfStatement(
-                    BinaryExpression(LogicalAndExpression,
-                        MemberAccessExpression(SimpleMemberAccessExpression, IdentifierName("value1"),
-                            IdentifierName("HasValue")),
-                        MemberAccessExpression(SimpleMemberAccessExpression, IdentifierName("value2"),
-                            IdentifierName("HasValue"))), ReturnStatement(ThisExpression().WithLeadingTrivia(Space)).WithLeadingTrivia(Space)),
-                ReturnStatement(LiteralExpression(NullLiteralExpression).WithLeadingTrivia(Space)));
+            ExpressionSyntax Condition(InvocationExpressionSyntax[] syntaxes)
+            {
+                switch (syntaxes.Length)
+                {
+                    case 1:
+                        return syntaxes[0];
+                    case 2:
+                        return BinaryExpression(LogicalAndExpression, syntaxes[0], syntaxes[1]);
+                    default:
+                        return BinaryExpression(LogicalAndExpression, syntaxes[0], Condition(syntaxes.Skip(1).ToArray()));
+                }
+            }
         }
-
-        static StatementSyntax GetWithNew(IEnumerable<Field> fields)
-        {
-            throw new NotImplementedException();
-        }
-
+        
         static IEnumerable<ParameterSyntax> GetWithParameters(IEnumerable<Field> fields)
             => fields.Select(GetWithParameter);
 
@@ -238,58 +265,5 @@ namespace ImmutableClass
                     EqualsValueClause(
                         DefaultExpression(
                             IdentifierName($"Optional<{field.Type}>"))));
-
-
-        //static SeparatedSyntaxList<MethodDeclarationSyntax> AddWithMethods(BaseTypeDeclarationSyntax typeDecl, FieldDeclarationSyntax[] readonlyFields)
-        //{
-        //    return SeparatedList(readonlyFields.SelectMany(field =>
-        //    {
-        //        return field.Declaration.Variables.Select(variable =>
-        //        {
-        //            return MethodDeclaration(returnType: ParseTypeName(typeDecl.Identifier.ValueText).WithTrailingTrivia(Space),
-        //                                     identifier: $"With{variable.Identifier.ValueText.AsProperty()}")
-        //                .AddModifiers(Token(PublicKeyword).WithTrailingTrivia(Space))
-        //                .AddParameterListParameters(Parameter(Identifier("value")).WithType(field.Declaration.Type))
-        //                .WithBody(
-        //                    Block(
-        //                        IfStatement(
-        //                            InvocationExpression(
-        //                                IdentifierName("ReferenceEquals"),
-        //                                ArgumentList(SeparatedList(new[]
-        //                                {
-        //                                    Argument(
-        //                                        IdentifierName("value")),
-        //                                    Argument(
-        //                                        IdentifierName("this." + variable.Identifier.ValueText))
-        //                                }))
-        //                            ),
-        //                            ReturnThis(),
-        //                            ElseClause(
-        //                                ReturnStatement(
-        //                                    ObjectCreationExpression(
-        //                                        ParseTypeName(typeDecl.Identifier.ValueText).WithLeadingTrivia(Space),
-        //                                        ArgumentList(SeparatedList(
-        //                                                readonlyFields.SelectMany(_field =>
-        //                                                    _field.Declaration.Variables.Select(_variable =>
-        //                                                    {
-        //                                                        var identifier = _variable == variable
-        //                                                            ? "value"
-        //                                                            : "this." + _variable.Identifier.ValueText;
-        //                                                        return Argument(
-        //                                                            IdentifierName(identifier));
-        //                                                    })
-        //                                                )
-        //                                            )
-        //                                        ),
-        //                                        null
-        //                                    ).WithLeadingTrivia(Space))
-        //                            )
-        //                        )
-        //                    )
-        //                )
-        //                .WithTrailingTrivia(CarriageReturnLineFeed);
-        //        });
-        //    }));
-        //}
     }
 }
