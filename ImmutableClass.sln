@@ -1,15 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.27703.2000
+VisualStudioVersion = 15.0.26228.31
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ImmutableClass", "ImmutableClass\ImmutableClass.csproj", "{F8491A7A-0BD7-438C-A65C-396E9B93FCDF}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Immutable_Class", "Immutable-Class\Immutable_Class\Immutable_Class.csproj", "{3B17FCF1-3BBF-429F-A9EB-0F7EE1025D9E}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ImmutableClass.Test", "ImmutableClass.Test\ImmutableClass.Test.csproj", "{DB469905-9138-4F31-B5C5-66D0599FCC3A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Immutable_Class.Test", "Immutable-Class\Immutable_Class.Test\Immutable_Class.Test.csproj", "{55297C78-E80A-4CBD-8B11-40D571EA85DF}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ImmutableClass.Vsix", "ImmutableClass.Vsix\ImmutableClass.Vsix.csproj", "{F4C71131-CBB5-47DF-94C2-D630700381CF}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ImmutableClass.Framework.Test", "ImmutableClass.Framework.Test\ImmutableClass.Framework.Test.csproj", "{6EFC9EEA-B68F-4DA7-B148-DE573C16AE95}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Immutable_Class.Vsix", "Immutable-Class\Immutable_Class.Vsix\Immutable_Class.Vsix.csproj", "{BDA1C237-025F-42F8-B701-C032FA4E7580}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -17,22 +15,18 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{F8491A7A-0BD7-438C-A65C-396E9B93FCDF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F8491A7A-0BD7-438C-A65C-396E9B93FCDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{F8491A7A-0BD7-438C-A65C-396E9B93FCDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F8491A7A-0BD7-438C-A65C-396E9B93FCDF}.Release|Any CPU.Build.0 = Release|Any CPU
-		{DB469905-9138-4F31-B5C5-66D0599FCC3A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{DB469905-9138-4F31-B5C5-66D0599FCC3A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{DB469905-9138-4F31-B5C5-66D0599FCC3A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{DB469905-9138-4F31-B5C5-66D0599FCC3A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{F4C71131-CBB5-47DF-94C2-D630700381CF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F4C71131-CBB5-47DF-94C2-D630700381CF}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{F4C71131-CBB5-47DF-94C2-D630700381CF}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F4C71131-CBB5-47DF-94C2-D630700381CF}.Release|Any CPU.Build.0 = Release|Any CPU
-		{6EFC9EEA-B68F-4DA7-B148-DE573C16AE95}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{6EFC9EEA-B68F-4DA7-B148-DE573C16AE95}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{6EFC9EEA-B68F-4DA7-B148-DE573C16AE95}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{6EFC9EEA-B68F-4DA7-B148-DE573C16AE95}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3B17FCF1-3BBF-429F-A9EB-0F7EE1025D9E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3B17FCF1-3BBF-429F-A9EB-0F7EE1025D9E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3B17FCF1-3BBF-429F-A9EB-0F7EE1025D9E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3B17FCF1-3BBF-429F-A9EB-0F7EE1025D9E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{55297C78-E80A-4CBD-8B11-40D571EA85DF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{55297C78-E80A-4CBD-8B11-40D571EA85DF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{55297C78-E80A-4CBD-8B11-40D571EA85DF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{55297C78-E80A-4CBD-8B11-40D571EA85DF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BDA1C237-025F-42F8-B701-C032FA4E7580}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BDA1C237-025F-42F8-B701-C032FA4E7580}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BDA1C237-025F-42F8-B701-C032FA4E7580}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BDA1C237-025F-42F8-B701-C032FA4E7580}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
