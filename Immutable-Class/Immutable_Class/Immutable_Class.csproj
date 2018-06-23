@@ -35,6 +35,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="CodeFixProvider.cs" />
+    <Compile Include="Core\Class.cs" />
+    <Compile Include="Core\Extensions.cs" />
+    <Compile Include="Core\Field.cs" />
     <Compile Include="DiagnosticAnalyzer.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Resources.Designer.cs">
